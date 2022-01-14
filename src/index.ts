@@ -1,15 +1,14 @@
 import { SlashCommandBuilder } from '@discordjs/builders'
 import { REST } from '@discordjs/rest'
-import { createAudioPlayer, createAudioResource, DiscordGatewayAdapterCreator, joinVoiceChannel } from '@discordjs/voice'
+import { AudioPlayerStatus, createAudioPlayer, createAudioResource, DiscordGatewayAdapterCreator, joinVoiceChannel } from '@discordjs/voice'
 import { Routes } from 'discord-api-types/v9'
 import { Awaitable, Client, CommandInteraction, Intents } from 'discord.js'
 import fs from 'fs'
 import path from 'path'
-// import config from './config.json'
-import { initialize_player } from './music'
+import { queue } from './music'
 
 const config = {
-        token: 'NzA4MDQ5NzY4NzU2MjgxNDM1.XrRsuw.Ysbxnimqhx3dl0d3hFewyPMfOyA'
+    token: 'NzA4MDQ5NzY4NzU2MjgxNDM1.XrRsuw.ld_B6KfO6GAp4ECdptj3pJsTO-4'
 }
 
 const rest = new REST({ version: '9' }).setToken(config.token)
@@ -60,8 +59,6 @@ ready_promises.push(new Promise((resolve, reject) => {
 client.on('ready', async () => {
     console.log('Bot Ready')
 
-    initialize_player(client)
-
     try {
         console.log('Started refreshing application (/) commands.')
 
@@ -75,6 +72,10 @@ client.on('ready', async () => {
             { body: commands.map(v => v.command) }
         )
 
+        await rest.put(
+            Routes.applicationGuildCommands(client.user!.id, '921964025242341376'),
+            { body: commands.map(v => v.command) }
+        )
         console.log('Successfully reloaded application (/) commands.')
     } catch (error) {
         console.error(error)
@@ -90,26 +91,32 @@ client.on('interactionCreate', async interaction => {
 client.on('messageCreate', message => {
     const voice_channel = message.member?.voice.channel
     const sound = sounds.find(s => s.name == message.content.toLocaleLowerCase())
-    console.log('Playing', sound)
 
-    if (voice_channel && sound && message.guildId && message.guild?.voiceAdapterCreator) {
-        const connection = joinVoiceChannel({
-            adapterCreator: message.guild?.voiceAdapterCreator as unknown as DiscordGatewayAdapterCreator,
-            channelId: message.member.voice.channel.id,
-            guildId: message.guildId,
-            selfDeaf: false
-        })
+    if (voice_channel && sound && message.guildId && message.guild?.voiceAdapterCreator && queue.player?.state.status !== AudioPlayerStatus.Playing) {
+
+        if (!client.voice.adapters.has(message.member.voice.channel.id) || queue.connection == undefined) {
+            const connection = joinVoiceChannel({
+                adapterCreator: message.guild?.voiceAdapterCreator as unknown as DiscordGatewayAdapterCreator,
+                channelId: message.member.voice.channel.id,
+                guildId: message.guildId,
+                selfDeaf: false
+            })
+
+            const player = createAudioPlayer()
+            connection.subscribe(player)
+
+            queue.connection = connection
+            queue.player = player
+            queue.songs = []
+        }
+
         const index = Math.floor(Math.random() * sound.files.length)
         const file = sound.files[index]
-        console.log('file', file)
 
         const audio_resource = createAudioResource(path.join(sounds_path, file), { inlineVolume: true })
 
-        audio_resource.volume!.setVolume(0.3)
-        const player = createAudioPlayer()
-        connection.subscribe(player)
-        player.play(audio_resource)
-        console.log('adui', audio_resource)
+        audio_resource.volume!.setVolume(0.5)
+        queue.player!.play(audio_resource)
     }
 })
 

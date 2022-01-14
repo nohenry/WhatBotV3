@@ -1,7 +1,11 @@
 import { SlashCommandBuilder } from '@discordjs/builders'
-import { RepeatMode, Song, Utils } from 'discord-music-player'
 import { CommandInteraction, MessageEmbed } from 'discord.js'
-import { music_player } from '../music'
+import ytdl, { } from 'ytdl-core'
+import { AudioPlayerStatus, createAudioPlayer, createAudioResource, DiscordGatewayAdapterCreator, joinVoiceChannel } from '@discordjs/voice'
+import { Readable } from 'stream'
+import { getFromId, search, YouTubeSearchResults } from '../yt'
+import { queue } from '../music'
+
 
 export const command = new SlashCommandBuilder()
     .setName('stereo')
@@ -71,101 +75,156 @@ export const command = new SlashCommandBuilder()
             .setDescription('Displays the current song\'s progress')
     )
 
+const parseTarget = async (target: string) => {
+    try {
+        const url = new URL(target)
+        const video = (await getFromId(url.searchParams.get('v')!, { key: 'AIzaSyA6M1UI6woCOk4qr4Ifi4dmtHZJREY0n-c', maxResults: 1, part: 'snippet,contentDetails' })).results[0]
+        return video
+    } catch (error) {
+        const result = (await search(target, { key: 'AIzaSyA6M1UI6woCOk4qr4Ifi4dmtHZJREY0n-c', maxResults: 1 })).results[0]
+        const video = (await getFromId(result.id, { key: 'AIzaSyA6M1UI6woCOk4qr4Ifi4dmtHZJREY0n-c', maxResults: 1, part: 'snippet,contentDetails' })).results[0]
+        return video
+    }
+}
+
+// Play function to play a song
+const play = async (target: YouTubeSearchResults) => {
+    const readable = new Readable()
+    readable._read = () => { }
+
+    const resource = ytdl(target.link, { filter: 'audioonly' })
+    resource.on('data', chunk => readable.push(chunk))
+    resource.on('close', () => readable.push(null))
+
+    const discordResource = createAudioResource(readable)
+
+    queue.player!.play(discordResource)
+}
+
+const time = (): number => {
+    if (queue.player!.state.status == AudioPlayerStatus.Playing) {
+        return queue.player!.state.playbackDuration
+    } else {
+        return 0
+    }
+}
+
+const progress = (spaces: number) => {
+    let string = ''
+    const diff = time()
+    const max = queue.songs![0].durationMs
+    const n = spaces * diff / max
+
+    const mcurr = Math.round(diff / 1000 / 60)
+    const scurr = Math.round(diff / 1000) % 60
+    const mmax = Math.round(max / 1000 / 60)
+    const smax = Math.round(max / 1000) % 60
+    string += '[' + '='.repeat(n) + '>' + ' '.repeat(spaces - n) + '] [' + `${mcurr}:${scurr.toString().padStart(2, '0')}/${mmax}:${smax.toString().padStart(2, '0')}]`
+    return string
+}
 
 export const onExecute = async (interaction: CommandInteraction) => {
-
     const guild = interaction.client.guilds.cache.get(interaction.guild!.id)!
     const member = guild.members.cache.get(interaction.member!.user.id)
     const voiceChannel = member!.voice.channel
 
     if (!voiceChannel) return
-    const guildQueue = music_player.getQueue(guild.id)
 
     await interaction.deferReply()
     try {
         switch (interaction.options.getSubcommand()!) {
             case 'play': {
-                const target = interaction.options.getString('target')
-                if (target) {
-                    const queue = music_player.createQueue(interaction.guild!.id)
+                const ptarget = interaction.options.getString('target')
+                if (ptarget) {
+                    const target = parseTarget(ptarget)
 
-                    let promse = new Promise<Song>(async (resolve, reject) => {
-                        let song = await Utils.link(target, undefined, queue);
-                        if (!song)
-                            song = (await Utils.search(target, undefined, queue))[0];
-                        resolve(song)
 
-                        const embed = new MessageEmbed()
-                            .setColor('#620043')
-                            .setTitle(song.name)
-                            .setImage(song.thumbnail)
-                            .setAuthor({ name: song.author })
-                            .setDescription(song.duration)
+                    if (!interaction.client.voice.adapters.has(voiceChannel.id) || queue.connection === undefined) {
+                        // Connects to vc
+                        const connection = joinVoiceChannel({
+                            adapterCreator: guild.voiceAdapterCreator as unknown as DiscordGatewayAdapterCreator,
+                            channelId: voiceChannel.id,
+                            guildId: guild.id,
+                            selfDeaf: false
+                        })
 
-                        interaction.editReply({ embeds: [embed] })
-                    })
+                        // Creates the audio player
+                        const player = createAudioPlayer()
+                        connection.subscribe(player)
+                        queue.connection = connection
+                        queue.player = player
+                        queue.songs = []
 
-                    console.log(interaction.client.voice.adapters)
-                    if (interaction.client.voice.adapters.size == 0) {
-                        queue.join(voiceChannel)
+                        // When song ends play the next
+                        queue.player.on(AudioPlayerStatus.Idle, () => {
+                            queue.songs!.shift()
+                            if (queue.songs!.length > 0)
+                                play(queue.songs![0])
+                        })
                     }
-                    const toplay = await promse
 
-                    const song = await queue.play(toplay).catch(e => {
-                        if (!guildQueue)
-                            queue.stop()
-                        console.error(e)
-                    }) as Song
-                    console.log(song)
+                    const yttarget = await target
+                    queue.songs!.push(yttarget)
+                    let embed: MessageEmbed
 
+                    if (queue.player!.state.status === AudioPlayerStatus.Idle) {
+                        play(queue.songs![0])
+                        embed = new MessageEmbed()
+                            .setColor('#620043')
+                            .setTitle('Playing: ' + yttarget.title)
+                            .setImage((yttarget.thumbnails.high?.url || yttarget.thumbnails.standard?.url)!)
+                            .setAuthor({ name: yttarget.channelTitle })
+                            .setDescription(yttarget.duration)
+                    } else {
+                        embed = new MessageEmbed()
+                            .setColor('#620043')
+                            .setTitle('Queued: ' + yttarget.title)
+                            .setImage((yttarget.thumbnails.high?.url || yttarget.thumbnails.standard?.url)!)
+                            .setAuthor({ name: yttarget.channelTitle })
+                            .setDescription(yttarget.duration)
+                            .setFields({ name: 'Will play:', value: `${queue.songs!.length - 1} more to go` })
+                    }
+
+                    interaction.editReply({ embeds: [embed] })
                 } else {
-                    console.log('skipped')
-                    guildQueue?.setPaused(false)
-
-                    if (guildQueue?.nowPlaying) interaction.editReply(`Paused: ${guildQueue.nowPlaying.name}`)
-                    else interaction.deleteReply()
+                    queue.player!.unpause()
+                    interaction.deleteReply()
                 }
                 break
             }
             case 'skip': {
-                const song = guildQueue?.skip()
-                if (song) interaction.editReply(`Skipped: ${song.name}`)
+                if (queue.player!.state != { status: AudioPlayerStatus.Idle }) {
+                    const current = queue.songs![0]
+                    queue.player!.stop()
+                    interaction.editReply(`Skipped: ${current.title}`)
+                }
                 else interaction.editReply('No song to skip!')
                 break
-            }
-            case 'stop': {
-                guildQueue?.stop()
+            } case 'stop': {
+                queue.songs = []
+                queue.player!.stop()
                 interaction.editReply('Stopped queue')
                 break
-            }
-            case 'pause': {
-                guildQueue?.setPaused(true)
-                if (guildQueue?.nowPlaying) interaction.editReply(`Paused: ${guildQueue.nowPlaying.name}`)
+            } case 'pause': {
+                const pause = queue.player!.pause()
+                if (pause) interaction.editReply(`Paused: ${queue.songs![0].title}`)
                 else interaction.deleteReply()
                 break
-            }
-            case 'loop': {
-                if (interaction.options.getBoolean('queue')) guildQueue?.setRepeatMode(RepeatMode.QUEUE)
-                else guildQueue?.setRepeatMode(RepeatMode.SONG)
-                interaction.deleteReply()
+            } case 'loop': {
                 break
-            }
-            case 'noloop': {
-                guildQueue?.setRepeatMode(RepeatMode.DISABLED)
-                break
-            }
-            case 'clear': {
-                guildQueue?.clearQueue()
+            } case 'clear': {
+                const current = queue.songs!.shift()
+                queue.songs = [current!]
                 break
             }
             case 'current': {
-                const playing = guildQueue?.nowPlaying
-                if (playing) {
+                if (queue.songs!.length > 0) {
+                    const playing = queue.songs![0]
                     const embed = new MessageEmbed()
                         .setColor('#620043')
-                        .setTitle(playing.name)
-                        .setImage(playing.thumbnail)
-                        .setAuthor({ name: playing.author })
+                        .setTitle(playing.title)
+                        .setImage((playing.thumbnails.high?.url || playing.thumbnails.standard?.url)!)
+                        .setAuthor({ name: playing.channelTitle })
                         .setDescription(playing.duration)
 
                     interaction.editReply({ embeds: [embed] })
@@ -174,27 +233,26 @@ export const onExecute = async (interaction: CommandInteraction) => {
                 }
                 break
             }
-            case 'seek': {
-                const time = interaction.options.getString('time')!
-                const spt = time.split(':')
-                const minute = parseInt(spt[0])
-                const second = parseInt(spt[1])
-                const sum = (minute * 60 + second) * 1000
-                guildQueue?.seek(sum)
-                interaction.editReply(`Seeked to: ${minute}:${second}`)
-                break
-            }
+            // } case 'seek': {
+            //     const time = interaction.options.getString('time')!
+            //     const spt = time.split(':')
+            //     const minute = parseInt(spt[0])
+            //     const second = parseInt(spt[1])
+            //     const sum = (minute * 60 + second) * 1000
+            //     guildQueue?.seek(sum)
+            //     interaction.editReply(`Seeked to: ${minute}:${second}`)
+            //     break
+            // }
             case 'progress': {
-                const playing = guildQueue?.nowPlaying
-                if (playing) {
-                    const progress = guildQueue.createProgressBar({ size: 30 })
-                    const pstr = progress.prettier.replace(/ /g, ' ')
+                if (queue.songs!.length > 0) {
+                    const playing = queue.songs![0]
+                    const prog = progress(30)
+
                     const embed = new MessageEmbed()
                         .setColor('#620043')
-                        .setTitle(playing.name)
-                        .setAuthor({ name: playing.author })
-                        .setFields({ name: 'progress', value: pstr })
-                    console.log(progress, progress.toString(), progress.prettier, progress)
+                        .setTitle(playing.title)
+                        .setAuthor({ name: playing.channelTitle })
+                        .setFields({ name: 'progress', value: prog })
 
                     interaction.editReply({ embeds: [embed] })
                 } else {
@@ -203,9 +261,8 @@ export const onExecute = async (interaction: CommandInteraction) => {
                 break
             }
         }
-    }
-    catch (e) {
-        console.error(e)
-        interaction.editReply('Error in command! Please try again.')
+    } catch (error) {
+        console.error(error)
+        interaction.editReply('There was an error with the command! Please try again.')
     }
 }

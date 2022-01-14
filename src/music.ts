@@ -1,8 +1,4 @@
-import { Player } from 'discord-music-player'
-import { Client } from 'discord.js'
+import { AudioPlayer, VoiceConnection } from '@discordjs/voice'
+import { YouTubeSearchResults } from './yt'
 
-export let music_player: Player
-
-export const initialize_player = (client: Client) => {
-    music_player = new Player(client)
-}
+export let queue: { songs?: YouTubeSearchResults[], connection?: VoiceConnection, player?: AudioPlayer } = {}
