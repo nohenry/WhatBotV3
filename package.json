@@ -17,7 +17,8 @@
     "discord-api-types": "^0.26.1",
     "discord-music-player": "^8.3.1",
     "discord.js": "^13.5.1",
-    "libsodium-wrappers": "^0.7.9"
+    "libsodium-wrappers": "^0.7.9",
+    "ytdl-core": "^4.10.0"
   },
   "devDependencies": {
     "tsc": "^2.0.3",

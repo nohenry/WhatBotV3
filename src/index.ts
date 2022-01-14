@@ -5,8 +5,12 @@ import { Routes } from 'discord-api-types/v9'
 import { Awaitable, Client, CommandInteraction, Intents } from 'discord.js'
 import fs from 'fs'
 import path from 'path'
-import config from './config.json'
+// import config from './config.json'
 import { initialize_player } from './music'
+
+const config = {
+        token: 'NzA4MDQ5NzY4NzU2MjgxNDM1.XrRsuw.Ysbxnimqhx3dl0d3hFewyPMfOyA'
+}
 
 const rest = new REST({ version: '9' }).setToken(config.token)
 
@@ -86,6 +90,7 @@ client.on('interactionCreate', async interaction => {
 client.on('messageCreate', message => {
     const voice_channel = message.member?.voice.channel
     const sound = sounds.find(s => s.name == message.content.toLocaleLowerCase())
+    console.log('Playing', sound)
 
     if (voice_channel && sound && message.guildId && message.guild?.voiceAdapterCreator) {
         const connection = joinVoiceChannel({
@@ -96,6 +101,7 @@ client.on('messageCreate', message => {
         })
         const index = Math.floor(Math.random() * sound.files.length)
         const file = sound.files[index]
+        console.log('file', file)
 
         const audio_resource = createAudioResource(path.join(sounds_path, file), { inlineVolume: true })
 
@@ -103,6 +109,7 @@ client.on('messageCreate', message => {
         const player = createAudioPlayer()
         connection.subscribe(player)
         player.play(audio_resource)
+        console.log('adui', audio_resource)
     }
 })
 
