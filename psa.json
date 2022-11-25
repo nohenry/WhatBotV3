@@ -1,0 +1,1 @@
+{"announcements":[{"channel":"1039390916860973127","completed":true,"values":[{"text":"**WhatBot now supports generating `Let me google that for you` links!**"},{"text":"Usage:"},{"code":"/googlethat <search> [<mention>]\n\n<search> is that which you wish to search\n\n[<mention>] is whom you wish to mention and is optional"}]}]}

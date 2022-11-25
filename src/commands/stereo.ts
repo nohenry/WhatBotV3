@@ -1,7 +1,7 @@
 import { SlashCommandBuilder } from '@discordjs/builders'
-import { CommandInteraction, MessageEmbed } from 'discord.js'
+import { ChatInputCommandInteraction, CommandInteraction, EmbedBuilder, InteractionResponseType } from 'discord.js'
 import ytdl, { } from 'ytdl-core'
-import { AudioPlayerStatus, createAudioPlayer, createAudioResource, DiscordGatewayAdapterCreator, joinVoiceChannel } from '@discordjs/voice'
+import { AudioPlayerStatus, createAudioPlayer, createAudioResource, DiscordGatewayAdapterCreator, joinVoiceChannel, NoSubscriberBehavior } from '@discordjs/voice'
 import { Readable } from 'stream'
 import { getFromId, search, YouTubeSearchResults } from '../yt'
 import { queue } from '../music'
@@ -81,7 +81,7 @@ const parseTarget = async (target: string) => {
         const video = (await getFromId(url.searchParams.get('v')!, { key: 'AIzaSyA6M1UI6woCOk4qr4Ifi4dmtHZJREY0n-c', maxResults: 1, part: 'snippet,contentDetails' })).results[0]
         return video
     } catch (error) {
-        const result = (await search(target, { key: 'AIzaSyA6M1UI6woCOk4qr4Ifi4dmtHZJREY0n-c', maxResults: 1 })).results[0]
+        const result = (await search(target, { key: 'AIzaSyA6M1UI6woCOk4qr4Ifi4dmtHZJREY0n-c', maxResults: 1, type: 'video' })).results[0]
         const video = (await getFromId(result.id, { key: 'AIzaSyA6M1UI6woCOk4qr4Ifi4dmtHZJREY0n-c', maxResults: 1, part: 'snippet,contentDetails' })).results[0]
         return video
     }
@@ -119,41 +119,46 @@ const progress = (spaces: number) => {
     const scurr = Math.round(diff / 1000) % 60
     const mmax = Math.round(max / 1000 / 60)
     const smax = Math.round(max / 1000) % 60
-    string += '[' + '='.repeat(n) + '>' + ' '.repeat(spaces - n) + '] [' + `${mcurr}:${scurr.toString().padStart(2, '0')}/${mmax}:${smax.toString().padStart(2, '0')}]`
+    string += '[' + '='.repeat(n) + '>' + ' '.repeat(spaces - n) + '] [' + `${mcurr}:${scurr.toString().padStart(2, '0')}/${mmax}:${smax.toString().padStart(2, '0')}]`
     return string
 }
 
-export const onExecute = async (interaction: CommandInteraction) => {
-    const guild = interaction.client.guilds.cache.get(interaction.guild!.id)!
-    const member = guild.members.cache.get(interaction.member!.user.id)
+export const onExecute = async (_interaction: CommandInteraction) => {
+    const guild = _interaction.client.guilds.cache.get(_interaction.guild!.id)!
+    const member = guild.members.cache.get(_interaction.member!.user.id)
     const voiceChannel = member!.voice.channel
 
     if (!voiceChannel) return
+    if (!_interaction.isChatInputCommand()) return;
+
+    const interaction = _interaction as ChatInputCommandInteraction;
 
     await interaction.deferReply()
     try {
-        switch (interaction.options.getSubcommand()!) {
+        // switch (interaction.options.getSubcommand()!) {
+        switch (interaction.options.getSubcommand()) {
             case 'play': {
                 const ptarget = interaction.options.getString('target')
+                // const ptarget = "";
                 if (ptarget) {
                     const target = parseTarget(ptarget)
 
-
-                    if (!interaction.client.voice.adapters.has(voiceChannel.id) || queue.connection === undefined) {
+                    console.log(interaction.client.channels)
+                    // console.log(!interaction.client.voice.adapters.has(voiceChannel.id) , queue.connection );
+                    if (queue.connection === undefined || interaction.client.voice.adapters.size == 0) {
                         // Connects to vc
-                        const connection = joinVoiceChannel({
+                        console.log('joined vc')
+                        queue.connection = joinVoiceChannel({
                             adapterCreator: guild.voiceAdapterCreator as unknown as DiscordGatewayAdapterCreator,
                             channelId: voiceChannel.id,
                             guildId: guild.id,
                             selfDeaf: false
                         })
-
-                        // Creates the audio player
-                        const player = createAudioPlayer()
-                        connection.subscribe(player)
-                        queue.connection = connection
-                        queue.player = player
                         queue.songs = []
+                        // Creates the audio player
+                        const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } })
+                        queue.sub = queue.connection.subscribe(player)
+                        queue.player = player
 
                         // When song ends play the next
                         queue.player.on(AudioPlayerStatus.Idle, () => {
@@ -161,29 +166,44 @@ export const onExecute = async (interaction: CommandInteraction) => {
                             if (queue.songs!.length > 0)
                                 play(queue.songs![0])
                         })
+
+                        queue.player.on('error', error => {
+                            console.error('Error:', error.message, 'with track');
+                        });
                     }
 
+
                     const yttarget = await target
+                    console.log(yttarget)
+
+                    if (yttarget === undefined) {
+                        interaction.editReply("I'm sorry, youtube is an having a tantrum, please try again!")
+                        return;
+                    }
+
                     queue.songs!.push(yttarget)
-                    let embed: MessageEmbed
+                    let embed: EmbedBuilder
 
                     if (queue.player!.state.status === AudioPlayerStatus.Idle) {
                         play(queue.songs![0])
-                        embed = new MessageEmbed()
+
+                        embed = new EmbedBuilder()
                             .setColor('#620043')
                             .setTitle('Playing: ' + yttarget.title)
                             .setImage((yttarget.thumbnails.high?.url || yttarget.thumbnails.standard?.url)!)
                             .setAuthor({ name: yttarget.channelTitle })
-                            .setDescription(yttarget.duration)
+                            .setDescription(yttarget.duration.length == 0 ? '--' : yttarget.duration)
                     } else {
-                        embed = new MessageEmbed()
+                        embed = new EmbedBuilder()
                             .setColor('#620043')
                             .setTitle('Queued: ' + yttarget.title)
                             .setImage((yttarget.thumbnails.high?.url || yttarget.thumbnails.standard?.url)!)
                             .setAuthor({ name: yttarget.channelTitle })
-                            .setDescription(yttarget.duration)
+                            .setDescription(yttarget.duration.length == 0 ? '--' : yttarget.duration)
                             .setFields({ name: 'Will play:', value: `${queue.songs!.length - 1} more to go` })
                     }
+
+                    console.log(embed)
 
                     interaction.editReply({ embeds: [embed] })
                 } else {
@@ -193,10 +213,15 @@ export const onExecute = async (interaction: CommandInteraction) => {
                 break
             }
             case 'skip': {
-                if (queue.player!.state != { status: AudioPlayerStatus.Idle }) {
+                if (queue.player!.state.status != AudioPlayerStatus.Idle) {
                     const current = queue.songs![0]
                     queue.player!.stop()
                     interaction.editReply(`Skipped: ${current.title}`)
+
+
+                    queue.songs!.shift()
+                    if (queue.songs!.length > 0)
+                        play(queue.songs![0])
                 }
                 else interaction.editReply('No song to skip!')
                 break
@@ -220,7 +245,7 @@ export const onExecute = async (interaction: CommandInteraction) => {
             case 'current': {
                 if (queue.songs!.length > 0) {
                     const playing = queue.songs![0]
-                    const embed = new MessageEmbed()
+                    const embed = new EmbedBuilder()
                         .setColor('#620043')
                         .setTitle(playing.title)
                         .setImage((playing.thumbnails.high?.url || playing.thumbnails.standard?.url)!)
@@ -248,7 +273,7 @@ export const onExecute = async (interaction: CommandInteraction) => {
                     const playing = queue.songs![0]
                     const prog = progress(30)
 
-                    const embed = new MessageEmbed()
+                    const embed = new EmbedBuilder()
                         .setColor('#620043')
                         .setTitle(playing.title)
                         .setAuthor({ name: playing.channelTitle })
